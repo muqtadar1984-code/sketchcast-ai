@@ -221,3 +221,11 @@ def test_render_trial_fetches_the_earlier_runs_draft():
         ("books/lin/runs/run-27/ch01-dossier-full.json", "trial-source/ch01-dossier-full.json")]
     with pytest.raises(ValueError):
         stages.validate("render_trial", {"run": 0, "chapter": 1})
+
+
+def test_readiness_and_gate_r_summaries_carry_the_chapter_plan(tmp_path):
+    p = [{"chapter": 1, "title": "The language of algebra"}, {"chapter": 2, "title": "Expressions"}]
+    (tmp_path / "readiness.json").write_text(json.dumps({"pct": 99.2, "ready": False, "gaps": [], "plan": p}))
+    assert stages.STAGES["readiness"].collect(tmp_path)[2]["plan"] == p
+    (tmp_path / "gate_r.json").write_text(json.dumps({"passed": True, "pct": 100, "plan": p, "outstanding": []}))
+    assert stages.STAGES["gate_r"].collect(tmp_path)[2]["plan"] == p

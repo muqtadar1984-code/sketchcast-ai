@@ -18,6 +18,15 @@ import sys
 from pathlib import Path
 
 
+def plan(conn, slug: str) -> list[dict]:
+    """The book's chapters as its latest blueprint plans them ({chapter, title}, in order): the book app's workbench
+    shows every planned chapter, drafted or not (a book being planned has no chapter rows yet)."""
+    return [{"chapter": r["sort"], "title": r["title"]} for r in conn.execute(
+        "select c.sort, c.title from pub.blueprint_chapters c where c.blueprint_id = (select b.id from pub.blueprints b "
+        "join pub.works w on w.uid = b.work_uid where w.slug = %s order by b.revision desc limit 1) order by c.sort",
+        (slug,)).fetchall()]
+
+
 def gaps(conn, slug: str) -> dict:
     """Every topic the latest audit found outstanding, with what to do about it: its state and failing checks, the
     catalogue topic it maps to (none for a topic that does not exist yet), the chapter and objectives it serves, and
@@ -30,7 +39,7 @@ def gaps(conn, slug: str) -> dict:
         "select c.id, c.code, c.name from cat.curricula c join pub.works w on w.primary_curriculum_code = c.code "
         "where w.slug = %s", (slug,)).fetchone()
     if not run:
-        return {"gaps": [], "curriculum": None}
+        return {"gaps": [], "curriculum": None, "plan": plan(conn, slug)}
     rows = conn.execute("""
         select r.id, coalesce(t.title, r.proposed_title) as title, r.topic_id, t.slug as topic_slug, t.status as topic_status,
                r.node_codes, r.role, c.sort as chapter, c.title as chapter_title, ts.state, ts.failing_checks
@@ -63,7 +72,7 @@ def gaps(conn, slug: str) -> dict:
                     "chapter_title": r["chapter_title"], "node_codes": r["node_codes"], "role": r["role"],
                     "state": r["state"], "failing": r["failing_checks"], "checks": detail[r["id"]],
                     "steps": steps[r["id"]]})
-    return {"gaps": out, "curriculum": {"id": str(cur["id"]), "code": cur["code"], "name": cur["name"]} if cur else None}
+    return {"gaps": out, "plan": plan(conn, slug), "curriculum": {"id": str(cur["id"]), "code": cur["code"], "name": cur["name"]} if cur else None}
 
 
 def main() -> None:

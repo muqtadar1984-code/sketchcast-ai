@@ -87,13 +87,13 @@ def _proof_collect(out: Path) -> tuple[float, list[dict], dict]:
 
 def _readiness_collect(out: Path) -> tuple[float, list[dict], dict]:
     r = json.loads((out / "readiness.json").read_text(encoding="utf-8"))
-    return 0.0, [], {k: r.get(k) for k in ("pct", "ready", "outstanding_by_state", "gaps", "curriculum")}
+    return 0.0, [], {k: r.get(k) for k in ("pct", "ready", "outstanding_by_state", "gaps", "curriculum", "plan")}
 
 
 def _gate_r_collect(out: Path) -> tuple[float, list[dict], dict]:
     """The readiness summary's keys (the app's Overview card and Gaps tab read either run) plus what Gate R pinned."""
     r = json.loads((out / "gate_r.json").read_text(encoding="utf-8"))
-    keep = ("passed", "pct", "pins", "edition_id", "policy", "gaps", "curriculum")
+    keep = ("passed", "pct", "pins", "edition_id", "policy", "gaps", "curriculum", "plan")
     states: dict[str, int] = {}
     for o in r.get("outstanding") or []:
         states[o["state"]] = states.get(o["state"], 0) + 1
