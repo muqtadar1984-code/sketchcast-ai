@@ -21,7 +21,7 @@ from pathlib import Path
 def main() -> None:
     from publishing import localdb
     from publishing.pins import gate_r
-    from publishing.runner.readiness import gaps
+    from publishing.runner.readiness import gaps, plan
     from publishing.snapshot import take_snapshot
     slug, rel = sys.argv[1], sys.argv[2]
     out = Path(os.environ["PUBLISH_OUT"]) / "manuscripts" / slug / rel
@@ -36,7 +36,7 @@ def main() -> None:
     print(f"Gate R for {slug}…", flush=True)
     r = gate_r(conn, slug)
     conn.commit()
-    result = {"slug": slug, "passed": bool(r["ready"]), **r}
+    result = {"slug": slug, "passed": bool(r["ready"]), **r, "plan": plan(conn, slug)}
     if r["ready"]:
         print(f"{slug}: PASSED — {r['pins']} sources pinned, edition {r['edition_id']} open for drafting", flush=True)
     else:
