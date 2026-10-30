@@ -110,6 +110,93 @@ def reindex_and_regenerate(sb, issue: dict, gen: dict, book: dict, diagnosis: di
         return {"action": "regen_blocked_single_chapter",
                 "detail": "one chapter and it reads as its title; a re-split would change nothing"}
 
+    # One agent re-index per book at a time, never under a live queue, at
+    # most once per book per day (surge plan §4.5 items 3–4, founder D5).
+    # 2026-10-22: three concurrent agent re-indexes on a book with ~250 jobs
+    # queued shrank its part map under them and failed six more.
+    from support_agent.burst import acquire_lease, release_lease
+
+    lease = acquire_lease(sb, f"support_reindex:{book['id']}", REINDEX_LEASE_TTL_S)
+    if not lease:
+        why = "another agent re-index holds this book" if lease is None else "book lock unavailable"
+        return {"action": "regen_blocked_locked", "detail": why}
+    try:
+        refusal = _reindex_refusal(sb, book["id"])
+        if refusal:
+            return refusal
+        _record_reindex(sb, book["id"], issue["id"])
+        return _reindex_verify_regenerate(sb, issue, gen, book, client, job_id, chapter_ref, owner_id)
+    finally:
+        release_lease(sb, lease)
+
+
+REINDEX_LEASE_TTL_S = 90 * 60
+REINDEX_DAILY_CAP = 1
+_REINDEX_AUDIT = "support_agent:reindex"
+# The agent's own jobs carry the book id while it runs; they are not "busy".
+_SUPPORT_JOB_TYPES = ("support_diagnose", "issue_resolve")
+
+
+def _reindex_refusal(sb, book_id: str) -> dict | None:
+    """Why the agent may not re-index this book now, or None. Fails CLOSED:
+    a question the database cannot answer is a reason to page a human."""
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        r = (sb.table("generations").select("id").eq("book_id", book_id)
+             .in_("status", ["queued", "processing"]).limit(50).execute())
+        live_gens = len(getattr(r, "data", None) or [])
+        r = (sb.table("jobs").select("id, type").eq("book_id", book_id)
+             .in_("status", ["queued", "processing"]).limit(50).execute())
+        live_jobs = [j for j in (getattr(r, "data", None) or []) if j.get("type") not in _SUPPORT_JOB_TYPES]
+    except Exception as exc:  # noqa: BLE001
+        return {"action": "regen_blocked_busy", "detail": f"book busy: live-queue check failed ({exc})"}
+    if live_gens or live_jobs:
+        return {"action": "regen_blocked_busy",
+                "detail": f"book busy: {live_gens} generation(s) and {len(live_jobs)} job(s) queued or processing"}
+
+    now = datetime.now(timezone.utc)
+    try:
+        # queue_holds is the console's pause (surge plan §4.3); a database
+        # without it yet simply has no holds.
+        r = (sb.table("queue_holds").select("id, until").eq("scope", "book").eq("target_id", book_id)
+             .is_("released_at", "null").execute())
+        held = [h for h in (getattr(r, "data", None) or [])
+                if not h.get("until") or str(h["until"]) > now.strftime("%Y-%m-%dT%H:%M:%S")]
+        if held:
+            return {"action": "regen_blocked_busy", "detail": "book busy: the book is on hold"}
+    except Exception:  # noqa: BLE001
+        pass
+
+    since = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    try:
+        r = (sb.table("platform_audit_log").select("id").eq("action", _REINDEX_AUDIT)
+             .eq("target_kind", "book").eq("target_id", book_id).gte("created_at", since).execute())
+        done_today = len(getattr(r, "data", None) or [])
+    except Exception as exc:  # noqa: BLE001
+        return {"action": "regen_blocked_daily_cap", "detail": f"re-index history unreadable ({exc})"}
+    if done_today >= REINDEX_DAILY_CAP:
+        return {"action": "regen_blocked_daily_cap",
+                "detail": f"the agent already re-indexed this book in the last 24 h ({done_today})"}
+    return None
+
+
+def _record_reindex(sb, book_id: str, issue_id: str) -> None:
+    """The daily cap's ledger, written BEFORE the re-index so a run that
+    crashes half-way still counts."""
+    sb.table("platform_audit_log").insert({
+        "actor_id": None, "action": _REINDEX_AUDIT, "target_kind": "book", "target_id": book_id,
+        "detail": {"issue_id": issue_id},
+    }).execute()
+
+
+def _reindex_verify_regenerate(sb, issue, gen, book, client, job_id, chapter_ref, owner_id) -> dict:
+    from worker.process import index_book
+    from agent1_ingestion.chapter_check import verify_chapter_content
+    from support_agent.bundle import _chapter_source_text
+    import tempfile
+    from pathlib import Path
+
     # Assigned-content check BEFORE any mutation (drives the pending path).
     r = sb.table("generation_shares").select("id").eq("generation_id", gen["id"]).limit(1).execute()
     assigned = bool(getattr(r, "data", None))
@@ -173,10 +260,29 @@ def notify_staff(issue: dict, reason: str) -> None:
     """Best-effort Resend email to the SketchCast team when the agent ESCALATES.
     A 'triaged' status nobody is told about isn't an escalation — staff must get
     an actionable email with a console deep-link, or reports rot silently."""
+    lines = [
+        "The support agent escalated an issue it couldn't safely fix.",
+        "",
+        f"Reason:   {reason[:500]}",
+        f"Severity: {issue.get('severity', 'normal')}",
+        f"Reported: {issue.get('created_at', '?')}",
+        f"Details:  {(issue.get('description') or '—')[:800]}",
+    ]
+    related = (issue.get("context") or {}).get("related_count") if isinstance(issue.get("context"), dict) else None
+    if related:
+        lines.append(f"Related:  +{related} more failure(s) with the same signature attached to this issue")
+    lines += ["", f"Console: https://app.sketchcast.app/console/issues/{issue.get('id')}"]
+    send_staff_email(
+        f"[Escalated] {issue.get('category', 'issue')}: {(issue.get('title') or 'support issue')[:120]}",
+        "\n".join(lines), issue.get("id"))
+
+
+def send_staff_email(subject: str, text: str, issue_id=None) -> None:
+    """Best-effort Resend email to the support mailbox; never raises."""
     key = os.getenv("RESEND_API_KEY")
     to = os.getenv("SUPPORT_STAFF_EMAIL", "muqtadar.quraishi@sketchcast.app")
     if not key:
-        logger.warning("staff escalation email SKIPPED (RESEND_API_KEY not set) for issue %s", issue.get("id"))
+        logger.warning("staff escalation email SKIPPED (RESEND_API_KEY not set) for issue %s", issue_id)
         return
     try:
         import requests
@@ -187,24 +293,13 @@ def notify_staff(issue: dict, reason: str) -> None:
             json={
                 "from": "SketchCast AI <noreply@sketchcast.app>",
                 "to": [to],
-                "subject": f"[Escalated] {issue.get('category', 'issue')}: {(issue.get('title') or 'support issue')[:120]}",
-                "text": "\n".join(
-                    [
-                        "The support agent escalated an issue it couldn't safely fix.",
-                        "",
-                        f"Reason:   {reason[:500]}",
-                        f"Severity: {issue.get('severity', 'normal')}",
-                        f"Reported: {issue.get('created_at', '?')}",
-                        f"Details:  {(issue.get('description') or '—')[:800]}",
-                        "",
-                        f"Console: https://app.sketchcast.app/console/issues/{issue.get('id')}",
-                    ]
-                ),
+                "subject": subject,
+                "text": text,
             },
             timeout=15,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("staff notify failed for issue %s: %s", issue.get("id"), exc)
+        logger.warning("staff notify failed for issue %s: %s", issue_id, exc)
 
 
 REPLY_LINE = ("If you face any issue with it, or anything else, just reply to this email and we will "

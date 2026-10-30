@@ -48,6 +48,9 @@ class _Q:
     def gte(self, *a):
         return self
 
+    def is_(self, *a):
+        return self
+
     def limit(self, *a):
         return self
 
@@ -85,6 +88,13 @@ class FakeSB:
 
     def table(self, name):
         return _Q(self, name)
+
+    def rpc(self, name, params=None):
+        """The lease functions (0125): every acquire is granted."""
+        self.rpcs = getattr(self, "rpcs", [])
+        self.rpcs.append((name, dict(params or {})))
+        data = "lease-1" if name == "acquire_provider_lease" else None
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=data))
 
 
 def _profile_sb(profiles_by_call):
@@ -804,3 +814,129 @@ def test_a_content_mismatch_resolves_as_a_user_fix_and_tells_the_owner_what_the_
     assert len(mails) == 1 and mails[0][0] == "u1" and "test paper" in mails[0][1]
     assert "not as 'pythagoras theorem'" in mails[0][2] and "Nothing on our side failed" in mails[0][2]
     assert not any(r.get("agent_action") == "escalated" for t, r in sb.updates if t == "platform_issues")
+
+
+# ── re-index under a live queue (surge plan §4.5 items 3–4, founder D5) ───────
+# 2026-10-22: three concurrent agent re-indexes on a book with ~250 jobs queued
+# shrank its part map under them and failed six more generations.
+
+class _LockSB(_RegenSB):
+    """_RegenSB whose lease answers are scripted: a lease id, None (someone
+    holds it) or an exception (the store cannot answer)."""
+
+    def __init__(self, tables, lease="lease-1"):
+        super().__init__(tables, assigned=False)
+        self._lease = lease
+        self.rpcs = []
+
+    def rpc(self, name, params=None):
+        self.rpcs.append((name, dict(params or {})))
+        if name == "acquire_provider_lease" and isinstance(self._lease, Exception):
+            raise self._lease
+        data = self._lease if name == "acquire_provider_lease" else None
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=data))
+
+
+def _index_spy(monkeypatch):
+    called = []
+    _patch_regen_path(monkeypatch, verify_ok=True)
+    monkeypatch.setattr("worker.process.index_book", lambda *a, **k: called.append(a))
+    return called
+
+
+def test_a_book_with_live_generations_is_never_reindexed(monkeypatch):
+    sb = _LockSB({"platform_issues": [], "generations": [{"id": "q1"}, {"id": "q2"}]})
+    called = _index_spy(monkeypatch)
+    out = actions.reindex_and_regenerate(sb, _ISSUE, _GEN, _BOOK, _HIGH, client=None, job_id="j1")
+    assert out["action"] == "regen_blocked_busy" and out["detail"].startswith("book busy")
+    assert not called and not sb.inserts and not [t for t, _ in sb.updates if t == "books"]
+    assert [n for n, _ in sb.rpcs] == ["acquire_provider_lease", "release_provider_lease"]
+
+
+def test_the_agents_own_support_jobs_do_not_make_the_book_busy(monkeypatch):
+    sb = _LockSB({"platform_issues": [], "jobs": [{"id": "j1", "type": "support_diagnose"}]})
+    called = _index_spy(monkeypatch)
+    out = actions.reindex_and_regenerate(sb, _ISSUE, _GEN, _BOOK, _HIGH, client=None, job_id="j1")
+    assert out["action"] == "regenerated" and called
+
+
+def test_a_queued_index_job_makes_the_book_busy(monkeypatch):
+    sb = _LockSB({"platform_issues": [], "jobs": [{"id": "x", "type": "index_book"}]})
+    called = _index_spy(monkeypatch)
+    out = actions.reindex_and_regenerate(sb, _ISSUE, _GEN, _BOOK, _HIGH, client=None, job_id="j1")
+    assert out["action"] == "regen_blocked_busy" and not called
+
+
+def test_a_book_held_by_staff_is_busy(monkeypatch):
+    sb = _LockSB({"platform_issues": [], "queue_holds": [{"id": "h1", "until": "2999-01-01T00:00:00+00:00"}]})
+    called = _index_spy(monkeypatch)
+    out = actions.reindex_and_regenerate(sb, _ISSUE, _GEN, _BOOK, _HIGH, client=None, job_id="j1")
+    assert out["action"] == "regen_blocked_busy" and "hold" in out["detail"] and not called
+
+
+def test_one_agent_reindex_per_book_per_day(monkeypatch):
+    sb = _LockSB({"platform_issues": [], "platform_audit_log": [{"id": "a1"}]})
+    called = _index_spy(monkeypatch)
+    out = actions.reindex_and_regenerate(sb, _ISSUE, _GEN, _BOOK, _HIGH, client=None, job_id="j1")
+    assert out["action"] == "regen_blocked_daily_cap" and not called and not sb.inserts
+
+
+def test_a_reindex_is_recorded_before_it_runs_and_the_lock_is_released(monkeypatch):
+    sb = _LockSB({"platform_issues": []})
+    order = []
+    _patch_regen_path(monkeypatch, verify_ok=True)
+    monkeypatch.setattr("worker.process.index_book",
+                        lambda *a, **k: order.append(("index", [t for t, _ in sb.inserts])))
+    out = actions.reindex_and_regenerate(sb, _ISSUE, _GEN, _BOOK, _HIGH, client=None, job_id="j1")
+    assert out["action"] == "regenerated"
+    audit = [r for t, r in sb.inserts if t == "platform_audit_log"]
+    assert audit == [{"actor_id": None, "action": "support_agent:reindex", "target_kind": "book",
+                      "target_id": "b1", "detail": {"issue_id": "i1"}}]
+    assert order == [("index", ["platform_audit_log"])], "the ledger row lands BEFORE index_book"
+    acquire, release = sb.rpcs
+    assert acquire[1]["p_provider"] == "support_reindex:b1" and acquire[1]["p_max"] == 1
+    assert release == ("release_provider_lease", {"p_id": "lease-1"})
+
+
+def test_another_agent_holding_the_book_blocks_the_reindex(monkeypatch):
+    sb = _LockSB({"platform_issues": []}, lease=None)
+    called = _index_spy(monkeypatch)
+    out = actions.reindex_and_regenerate(sb, _ISSUE, _GEN, _BOOK, _HIGH, client=None, job_id="j1")
+    assert out["action"] == "regen_blocked_locked" and not called
+    assert [n for n, _ in sb.rpcs] == ["acquire_provider_lease"], "nothing to release"
+
+
+def test_a_lock_store_that_cannot_answer_blocks_the_reindex(monkeypatch):
+    sb = _LockSB({"platform_issues": []}, lease=RuntimeError("PGRST202"))
+    called = _index_spy(monkeypatch)
+    out = actions.reindex_and_regenerate(sb, _ISSUE, _GEN, _BOOK, _HIGH, client=None, job_id="j1")
+    assert out["action"] == "regen_blocked_locked" and not called
+
+
+def test_the_lock_is_released_when_the_reindex_crashes(monkeypatch):
+    sb = _LockSB({"platform_issues": []})
+    _patch_regen_path(monkeypatch, verify_ok=True)
+    monkeypatch.setattr("worker.process.index_book", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        actions.reindex_and_regenerate(sb, _ISSUE, _GEN, _BOOK, _HIGH, client=None, job_id="j1")
+    assert sb.rpcs[-1] == ("release_provider_lease", {"p_id": "lease-1"})
+
+
+def test_a_busy_book_escalates_to_staff_with_the_reason(monkeypatch):
+    pytest.importorskip("supabase")
+    from support_agent import agent as agent_mod
+    staff = []
+    monkeypatch.setattr(agent_mod, "assemble_bundle", lambda sb, issue: {"chapters": []})
+    monkeypatch.setattr(agent_mod, "diagnose", lambda client, bundle: {
+        "category": "wrong_chapter_detection", "confidence": 0.92, "user_message": "m", "staff_note": "s",
+        "recommended_action": "reindex_regenerate", "gate_signals": {}})
+    monkeypatch.setattr(agent_mod, "reindex_and_regenerate", lambda *a, **k: {
+        "action": "regen_blocked_busy", "detail": "book busy: 40 generation(s) and 0 job(s) queued or processing"})
+    monkeypatch.setattr(agent_mod, "queue_owner_notice", lambda *a, **k: True)
+    monkeypatch.setattr(agent_mod, "notify_staff", lambda issue, reason: staff.append(reason))
+    gen = {"id": "g1", "kind": "presentation", "owner_id": "u1", "book_id": "b1", "status": "error"}
+    sb = _AgentSBWithBook(gen)
+    agent_mod._run(sb, {"id": "j1"}, {"id": "iss-11", "category": "generation_failed", "generation_id": "g1",
+                                      "reporter_id": "u1"}, client=None)
+    assert staff and staff[0].startswith("book busy")
+    assert any(r.get("agent_action") == "escalated" for t, r in sb.updates if t == "platform_issues")
